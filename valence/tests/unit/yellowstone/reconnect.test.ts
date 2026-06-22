@@ -6,7 +6,7 @@ describe("ReconnectBackoff", () => {
     const backoff = new ReconnectBackoff()
     const delays: number[] = []
     for (let i = 0; i < 10; i++) {
-      delays.push(backoff.getDelay())
+      delays.push(backoff.getDelay(backoff.attempt))
     }
 
     expect(delays[0]).toBeGreaterThanOrEqual(750)
@@ -25,7 +25,7 @@ describe("ReconnectBackoff", () => {
     const backoff = new ReconnectBackoff()
     for (let i = 0; i < 100; i++) {
       backoff.reset()
-      const delay = backoff.getDelay()
+      const delay = backoff.getDelay(backoff.attempt)
       const baseMax = 1_000
       const lowerBound = Math.floor(baseMax * 0.75)
       const upperBound = Math.ceil(baseMax * 1.25)
@@ -36,14 +36,14 @@ describe("ReconnectBackoff", () => {
 
   it("reset() returns attempt counter to 0 and delay to base", () => {
     const backoff = new ReconnectBackoff()
-    backoff.getDelay()
-    backoff.getDelay()
+    backoff.getDelay(backoff.attempt)
+    backoff.getDelay(backoff.attempt)
     expect(backoff.attempt).toBe(2)
 
     backoff.reset()
     expect(backoff.attempt).toBe(0)
 
-    const delay = backoff.getDelay()
+    const delay = backoff.getDelay(backoff.attempt)
     expect(delay).toBeGreaterThanOrEqual(750)
     expect(delay).toBeLessThanOrEqual(1250)
   })
@@ -52,13 +52,13 @@ describe("ReconnectBackoff", () => {
     const backoff = new ReconnectBackoff()
     expect(backoff.attempt).toBe(0)
 
-    backoff.getDelay()
+    backoff.getDelay(backoff.attempt)
     expect(backoff.attempt).toBe(1)
 
-    backoff.getDelay()
+    backoff.getDelay(backoff.attempt)
     expect(backoff.attempt).toBe(2)
 
-    backoff.getDelay()
+    backoff.getDelay(backoff.attempt)
     expect(backoff.attempt).toBe(3)
   })
 })

@@ -10,12 +10,13 @@ export class ReconnectBackoff {
     return this._attempt
   }
 
-  getDelay(): number {
+  /** @param attempt — zero-based retry attempt number */
+  getDelay(attempt: number): number {
+    this._attempt = attempt + 1
     const base = Math.min(
       MAX_DELAY_MS,
-      INITIAL_DELAY_MS * Math.pow(MULTIPLIER, this._attempt)
+      INITIAL_DELAY_MS * Math.pow(MULTIPLIER, attempt)
     )
-    this._attempt++
     const jitter = base * JITTER_RANGE
     const offset = Math.random() * jitter * 2 - jitter
     return Math.min(MAX_DELAY_MS, Math.round(base + offset))

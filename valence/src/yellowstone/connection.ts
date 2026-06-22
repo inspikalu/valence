@@ -72,7 +72,7 @@ export class YellowstoneConnection extends EventEmitter {
     return super.emit(event, ...args)
   }
 
-  async connect(): Promise<void> {
+  async connect(): Promise<InstanceType<YellowstoneClientConstructor>> {
     this.shuttingDown = false
 
     const fromSlot = this.lastSlot !== null ? this.lastSlot + BigInt(1) : undefined
@@ -112,6 +112,7 @@ export class YellowstoneConnection extends EventEmitter {
 
     this.backoff.reset()
     this.emit("connected", this.config.endpoint)
+    return client
   }
 
   async disconnect(): Promise<void> {
@@ -157,8 +158,9 @@ export class YellowstoneConnection extends EventEmitter {
     this.stream = null
     this.client = null
 
-    const delay = this.backoff.getDelay()
-    this.emit("reconnecting", reason, this.backoff.attempt, delay)
+    const attempt = this.backoff.attempt
+    const delay = this.backoff.getDelay(attempt)
+    this.emit("reconnecting", reason, attempt + 1, delay)
 
     await new Promise((resolve) => setTimeout(resolve, delay))
 
