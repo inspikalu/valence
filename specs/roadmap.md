@@ -31,15 +31,15 @@ multi-day arc.
   This is also the moment to confirm the wallet has enough SOL funded for
   the planned ~10+ tiny-tip submissions plus normal transaction fees.
 
-## Phase 2 — Yellowstone gRPC slot stream (mainnet, read-only)
+## Phase 2 — Yellowstone gRPC slot stream (mainnet, read-only) ✅
 
-- Connect to Yellowstone (Solinfra or fallback provider) and subscribe to
+- [x] Connect to Yellowstone (Solinfra or fallback provider) and subscribe to
   `slots`.
-- Print incoming slot numbers as they arrive; measure rough delivery
+- [x] Print incoming slot numbers as they arrive; measure rough delivery
   latency against RPC `getSlot` polling as a sanity check.
-- Implement basic reconnect-with-backoff so a dropped stream doesn't kill
+- [x] Implement basic reconnect-with-backoff so a dropped stream doesn't kill
   the process.
-- **Check**: stream runs for several minutes uninterrupted (or recovers
+- [x] **Check**: stream runs for several minutes uninterrupted (or recovers
   automatically from a manually-killed connection) and produces a strictly
   increasing slot sequence.
 
