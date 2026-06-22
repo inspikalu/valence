@@ -54,5 +54,8 @@ export function loadConfig(): ValenceConfig {
 
   const logLevel = stripValue(process.env.LOG_LEVEL) ?? "info"
 
-  return { rpcUrl, privateKey, keypairFile, logLevel }
+  const yellowstoneEndpoint = envOrNull(process.env.YELLOWSTONE_ENDPOINT)
+  const yellowstoneGrpcToken = envOrNull(process.env.YELLOWSTONE_GRPC_TOKEN)
+
+  return { rpcUrl, privateKey, keypairFile, logLevel, yellowstoneEndpoint, yellowstoneGrpcToken }
 }
