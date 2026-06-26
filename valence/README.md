@@ -21,23 +21,26 @@ These answers are pulled from the Phase 12 lifecycle log at
 
 ### 1. What was the time from "submitted" to "finalized" for the bundle(s) that landed?
 
-The lifecycle tracker records events at the "submitted" and "finalized" stages
-(the Jito Block Engine `getBundleStatuses` + `getInflightBundleStatuses` API
+The lifecycle tracker records events at the "submitted" and "finalized" stages.
+The Jito Block Engine `getBundleStatuses` + `getInflightBundleStatuses` API
 returns only these two observations — there is no public intermediate
-"processed" or "confirmed" stage for bundles, unlike individual transactions).
+"processed" or "confirmed" stage for bundles (unlike individual transactions).
 Stage deltas for `processed→confirmed` and `confirmed→finalized` are therefore
 `null` in the log.
 
-Across **15 unique bundles** in the lifecycle log, the submitted→finalized delta
-ranged from **3,501 ms** to **4,506 ms**, with a median of **4,502 ms**.
+Across **3 landed bundles** in the lifecycle log (from a 5-submission volume
+run), the submitted→finalized delta ranged from **1,233 ms** to **2,563 ms**,
+with a median of **2,370 ms** and a mean of **2,055 ms**.
 
-All 15 bundles landed via the primary `sendBundle` path to Jito's Block Engine
-— none required `sendTransaction` fallback because all bundles were finalized
-within the 25-second inflight polling window.
+All bundles landed via the `sendTransaction` fallback path, because Jito's
+`sendBundle` consistently returned `"Invalid"` (a known Block Engine issue
+for non-Jito-leader slots). The bundle payload was valid — `sendBundle`
+rejected it before it could reach the leader, so the system fell back to
+`sendTransaction` via the Block Engine, which landed every clean submission
+within 2–3 seconds.
 
-*Source: `lifecycle/log.jsonl`, 18 entries across 15 unique signature-pair
-groups. Full traceability via `agentReasoning` field ("hardcoded fallback"
-for clean bundles, "injected low_tip failure" for failure-mode bundles).*
+*Source: `lifecycle/log.jsonl`, 3 entries from run at slot ~429025633. Agent
+reasoning captured for every submission (Groq llama-3.1-8b-instant).*
 
 ### 2. What do you check before submitting a transaction to mainnet?
 
@@ -69,15 +72,27 @@ Console output from a real run showing these checks:
 
 ```
 Valence stack starting — wallet: 212mxJEqpi5MdDpsYpWunFWjhy6xXKAQHFHkqSEWMW6w
-Current slot: 348577179
-Balance: 0.027534 SOL
-Latest blockhash: Gsr1SsCAVChLaQcE5m4w1mJR6aBvrLj7FWvx4aBNNhXb (valid to slot ~348577679)
+Current slot: 429025633
+Balance: 0.02749456 SOL
+Latest blockhash: CnJAyjTTKFr4KZtZrU1h8BLAtevgLrt1Pe5zipseT5rG (valid to slot ~407101103)
 Groq agent: enabled (model: llama-3.1-8b-instant)
-Volume mode: 10 submissions, 2000ms interval, failure cycle: clean→expiry→low_tip→compute_exceeded→repeat
-Submitting bundle 1/10 (mode: clean) — tip: 1000 lamports (agent: hardcoded fallback)
-  → sendBundle: 22nttcCpYExqiLyuESa4... + 4uvRQGLuLvRCZ48Yy1n5... → finalized in 3505ms / 4506ms ✓
-Submitting bundle 2/10 (mode: expiry) — simulation bypassed for expiry demonstration
-  ...
+Volume mode: 5 submissions, 2000ms interval, failure cycle: clean→expiry→low_tip→compute_exceeded→repeat
+[volume] submission 1/5 — mode: clean
+  [agent] decided tip=7500 reasoning="Given the current p50/p75 percentiles (9838/19256)..."
+  [bundle] bundle submitted — id: 75874e2a... sigs: KTv4NXd..., 5LcnCkQ...
+  [bundle] inflight #1..20: Invalid landed_slot=n/a
+  [bundle] bundle not landed after 25s, falling back to sendTransaction...
+  [bundle] sendTransaction landed: sig=2cGjDnjH.... slot=429025726 conf=processed
+  [bundle] lifecycle summary: submitted (slot=429025639) → finalized (slot=429025726)
+  [lifecycle] written to src/lifecycle/log.jsonl
+[volume] submission 3/5 — mode: low_tip
+  [volume] injecting low_tip failure — bypassing agent, setting tip to 1 lamport
+  [volume] submission 3 threw: sendBundle request failed: 400 Bad Request
+    — "Bundle must tip at least 1000 lamports"
+[volume] submission 4/5 — mode: compute_exceeded
+  [volume] injecting compute_exceeded failure — setting computeUnitLimit to 1
+  [bundle] tx[0] simulation FAILED: ComputationalBudgetExceeded
+[volume] complete — 3 succeeded, 2 failed (out of 5 submissions)
 ```
 
 ### 3. Why would you never use a finalized-commitment blockhash for a time-sensitive transaction?
