@@ -83,6 +83,10 @@ export async function runBundleSubmission(
   const freshBlockhash = await rpc.getLatestBlockhash(blockhashCommitment)
   const currentSlot = await rpc.getSlot("processed")
   let bundleFailure: FailureClassification | null = null
+  let landedSig: string | null = null
+  let combinedSig: string | undefined
+  let bundleId: string | undefined
+  let pollCount = 0
 
   const accounts = await getTipAccounts(config.jitoBlockEngineUrl)
   const selector = new TipAccountSelector(accounts)
@@ -150,67 +154,81 @@ export async function runBundleSubmission(
         console.warn(`[bundle] simulation failed but INTENTIONAL_EXPIRY is active — continuing (failure: ${bundleFailure})`)
         break
       }
-      throw new Error(`Transaction ${i} simulation failed: ${JSON.stringify(err)}`)
+      bundleFailure = details.classification
+      console.warn(`[bundle] simulation failed — classified: ${bundleFailure} — skipping submission`)
+      break
     }
     const lastLog = simResult.value.logs?.[simResult.value.logs.length - 1] ?? "ok"
     console.log(`[bundle] tx[${i}] simulation passed — ${lastLog}`)
   }
 
   // Try sendBundle first; if it lands, great. If not, fall back to sendTransaction.
-  let landedSig: string | null = null
-  let combinedSig: string | undefined
+  landedSig = null
+  combinedSig = undefined
 
   console.log(`[bundle] submitting via sendBundle...`)
-  const bundleId = await submitBundle(config.jitoBlockEngineUrl, bundle)
-  tracker.recordSubmitted(bundleId, signatures, tipAmount, currentSlot, agentOutput.reasoning)
-  console.log(`[bundle] bundle submitted — id: ${bundleId}, sigs: ${signatures.join(", ")}`)
-
-  // Poll for bundle status
-  let pollCount = 0
-  for (; pollCount < 20; pollCount++) {
-    await sleep(1_250)
-    try {
-      const inflight = await getInflightBundleStatuses(config.jitoBlockEngineUrl, bundleId)
-      for (const s of inflight) {
-        console.log(`[bundle] inflight #${pollCount + 1}: ${s.status} landed_slot=${s.landed_slot ?? "n/a"}`)
-        if (s.status === "Landed") {
-          pollCount = 99
-        }
-      }
-    } catch (err) {
-      console.error(`[bundle] status poll error: ${err instanceof Error ? err.message : String(err)}`)
+  try {
+    bundleId = await submitBundle(config.jitoBlockEngineUrl, bundle)
+  } catch (err) {
+    if (!bundleFailure) {
+      const details = classifyFailure(err, { slot: currentSlot })
+      bundleFailure = details.classification
     }
+    console.warn(`[bundle] sendBundle failed — classified: ${bundleFailure}`)
   }
+  if (bundleId) {
+    tracker.recordSubmitted(bundleId, signatures, tipAmount, currentSlot, agentOutput.reasoning)
+    console.log(`[bundle] bundle submitted — id: ${bundleId}, sigs: ${signatures.join(", ")}`)
 
-  if (pollCount >= 99) {
-    // Bundle landed — get final status
-    await sleep(1_250)
-    const statuses = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
-    for (const s of statuses) {
-      console.log(`[bundle] final bundle status: slot=${s.slot ?? s.landed_slot ?? "n/a"} conf=${s.confirmation_status ?? "n/a"}`)
-      // Check for transaction-level errors in the bundle
-      if (s.transactions) {
-        for (const tx of s.transactions) {
-          if (tx.err !== null) {
-            const errStr = JSON.stringify(tx.err)
-            bundleFailure = classifyFailure(errStr, { slot: tx.slot }).classification
-            console.warn(`[bundle] tx ${tx.signature.slice(0, 16)}.. error: ${errStr} (classified: ${bundleFailure})`)
+    // Poll for bundle status
+    pollCount = 0
+    for (; pollCount < 20; pollCount++) {
+      await sleep(1_250)
+      try {
+        const inflight = await getInflightBundleStatuses(config.jitoBlockEngineUrl, bundleId)
+        for (const s of inflight) {
+          console.log(`[bundle] inflight #${pollCount + 1}: ${s.status} landed_slot=${s.landed_slot ?? "n/a"}`)
+          if (s.status === "Landed") {
+            pollCount = 99
+          }
+        }
+      } catch (err) {
+        console.error(`[bundle] status poll error: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    if (pollCount >= 99) {
+      // Bundle landed — get final status
+      await sleep(1_250)
+      const statuses = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
+      for (const s of statuses) {
+        console.log(`[bundle] final bundle status: slot=${s.slot ?? s.landed_slot ?? "n/a"} conf=${s.confirmation_status ?? "n/a"}`)
+        // Check for transaction-level errors in the bundle
+        if (s.transactions) {
+          for (const tx of s.transactions) {
+            if (tx.err !== null) {
+              const errStr = JSON.stringify(tx.err)
+              bundleFailure = classifyFailure(errStr, { slot: tx.slot }).classification
+              console.warn(`[bundle] tx ${tx.signature.slice(0, 16)}.. error: ${errStr} (classified: ${bundleFailure})`)
+            }
           }
         }
       }
-    }
-    landedSig = signatures[0]!
+      landedSig = signatures[0]!
 
-    // Poll for processed if gRPC didn't pick it up
-    for (const sig of signatures) {
-      await pollUntilProcessed(rpc, tracker, sig)
-    }
+      // Poll for processed if gRPC didn't pick it up
+      for (const sig of signatures) {
+        await pollUntilProcessed(rpc, tracker, sig)
+      }
 
-    // Poll for finalized
-    for (const sig of signatures) {
-      await pollUntilFinalized(rpc, tracker, sig)
+      // Poll for finalized
+      for (const sig of signatures) {
+        await pollUntilFinalized(rpc, tracker, sig)
+      }
     }
-  } else {
+  }
+
+  if (!bundleId || pollCount < 99) {
     // Bundle didn't land — fall back to sendTransaction
     console.log(`[bundle] bundle not landed after ${pollCount * 1.25}s, falling back to sendTransaction...`)
 
@@ -240,7 +258,9 @@ export async function runBundleSubmission(
     const simResult = await connection.simulateTransaction(combinedTx)
     if (simResult.value.err) {
       console.error(`[bundle] combined tx simulation FAILED: ${JSON.stringify(simResult.value.err)}`)
-      throw new Error(`Combined tx simulation failed: ${JSON.stringify(simResult.value.err)}`)
+      const details = classifyFailure(simResult.value.err, { slot: currentSlot })
+      bundleFailure = details.classification
+      console.warn(`[bundle] combined tx simulation failed — classified: ${bundleFailure}`)
     }
     console.log(`[bundle] combined tx simulation passed`)
 
@@ -296,9 +316,10 @@ export async function runBundleSubmission(
   }
 
   // Print lifecycle summary
-  const usedBundleId = pollCount >= 99
+  const fallbackId = landedSig ?? combinedSig ?? "unknown"
+  const usedBundleId = pollCount >= 99 && bundleId
     ? bundleId
-    : ("fallback-" + (landedSig ?? combinedSig ?? "unknown"))
+    : ("fallback-" + fallbackId)
   const events = tracker.getBundleEvents(usedBundleId)
   console.log(`[bundle] lifecycle summary (${events.length} events):`)
   for (const event of events) {

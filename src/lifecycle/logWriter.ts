@@ -22,12 +22,15 @@ export interface CreateLogEntryParams {
 }
 
 export function createLifecycleLogEntry(params: CreateLogEntryParams): LifecycleLogEntry {
-  const { bundleId, events } = params
+  const { bundleId, events, failure, tipLamports, agentReasoning } = params
 
   return {
     bundleId,
     events,
     stageDeltas: computeStageDeltas(events),
     writtenAt: Date.now(),
+    failure,
+    tipLamports,
+    agentReasoning,
   }
 }

@@ -24,6 +24,9 @@ export interface LifecycleLogEntry {
   events: LifecycleEvent[]
   stageDeltas: StageDeltas
   writtenAt: number
+  failure: FailureClassification | null
+  tipLamports: number
+  agentReasoning: string | null
 }
 
 const STAGE_PAIRS: [LifecycleStage, LifecycleStage, keyof StageDeltas][] = [
