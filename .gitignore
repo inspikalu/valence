@@ -5,3 +5,4 @@ logs/*.json
 **/log.jsonl
 dist/
 specs/
+bounty.md
