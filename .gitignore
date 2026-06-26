@@ -4,3 +4,4 @@ node_modules/
 logs/*.json
 **/log.jsonl
 dist/
+specs/
