@@ -17,6 +17,7 @@ export default defineConfig({
       "@valence/lifecycle": path.resolve(__dirname, "src/lifecycle"),
       "@valence/jito": path.resolve(__dirname, "src/jito"),
       "@valence/yellowstone": path.resolve(__dirname, "src/yellowstone"),
+      "@valence/yellowstone/leader": path.resolve(__dirname, "src/yellowstone/leader"),
       "@valence/agent": path.resolve(__dirname, "src/agent"),
       "@valence/log": path.resolve(__dirname, "src/log"),
     },

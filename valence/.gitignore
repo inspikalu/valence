@@ -3,3 +3,4 @@ dist/
 .env
 *.key
 logs/*.json
+**/log.jsonl

@@ -79,6 +79,29 @@ shipped to mainnet in Sept 2025 and is still expanding).
     polling-only confirmation: "RPC polling alone is not sufficient").
   - `blocksMeta` — lightweight, useful for slot/leader cross-referencing
     without pulling full block bodies.
+- **Transaction filter semantics** (empirically verified against Solinfra's
+  Yellowstone endpoint — matches the standard Yellowstone gRPC behavior):
+  - `vote: false` → excludes validator vote transactions (only non-vote txs)
+  - `vote: true` → shows ONLY vote transactions
+  - `vote` unset → shows both votes and non-votes (too noisy for wallet tracking)
+  - `failed: true` → shows ONLY failed transactions (restrictive, not additive)
+  - `failed: false` → shows ONLY successful transactions
+  - `failed` unset → shows all transactions (success and failed) — this is
+    the correct default for wallet tracking
+  - `accountInclude: [pubkey]` → matches any tx where the pubkey appears
+    in the account keys list
+- **Filter construction**: use a **combined** `SubscribeRequest.create()` that
+  sets slots + transactions filter + commitment in a single call. The protobuf
+  `map<string, SubscribeRequestFilter>` fields are **not** mutable after
+  `create()` — setting `request.transactions = {...}` after construction has
+  no effect. The `setWalletPubkey()` pattern stores the pubkey before
+  `connect()`, where the combined request is built.
+- **Solinfra constraints**:
+  - **1 concurrent stream** on the free tier — scripts must close connections
+    between tests
+  - **Backpressure enforcement** — the server closes streams if the client
+    doesn't consume updates fast enough. The wallet filter (~1 tx per test
+    send) is well within limits, but broad filters can trigger this
 - **Commitment**: subscribe at `processed` for earliest signal, but the
   lifecycle tracker independently re-derives `confirmed`/`finalized` state
   rather than trusting gRPC's buffered commitment-level delivery, since the
@@ -92,10 +115,16 @@ shipped to mainnet in Sept 2025 and is still expanding).
 
 ## Leader schedule
 
-- `getLeaderSchedule` / `getSlotLeaders` via standard Solana RPC, cross-
-  referenced against the live slot stream from Yellowstone to detect
-  "is a Jito-Solana leader's slot coming up soon" — this is the basis for
-  submission timing logic, separate from the AI agent's tip decision.
+- `getLeaderSchedule` via standard Solana RPC, cross-referenced against the
+  live slot stream from Yellowstone to detect "is a Jito-Solana leader's slot
+  coming up soon" — this is the basis for submission timing logic, separate
+  from the AI agent's tip decision.
+- **Jito validator identity resolution**: auto-fetched at startup from the
+  Kobe API (`https://kobe.mainnet.jito.network/api/v1/validators`) which
+  returns vote accounts running Jito-Solana. Vote accounts are cross-referenced
+  against `getVoteAccounts` RPC to resolve identity pubkeys. An optional
+  `JITO_VALIDATOR_KEYS` env var supplements or overrides the auto-fetched list.
+  Kobe API has a 5-second timeout with graceful fallback to env-var-only mode.
 
 ## AI agent (Tip Intelligence)
 

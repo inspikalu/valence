@@ -17,6 +17,9 @@ function cleanEnv(): void {
   delete process.env.PRIVATE_KEY
   delete process.env.KEYPAIR_FILE
   delete process.env.LOG_LEVEL
+  delete process.env.VOLUME_COUNT
+  delete process.env.VOLUME_INTERVAL_MS
+  delete process.env.INJECT_FAILURE_MODE
 }
 
 afterEach(() => {
@@ -55,6 +58,16 @@ describe("loadConfig", () => {
 
     const config = loadConfig()
     expect(config.logLevel).toBe("info")
+  })
+
+  it("defaults volume config values correctly", () => {
+    process.env.RPC_URL = "https://api.mainnet-beta.solana.com"
+    process.env.PRIVATE_KEY = "5MaiiCavjCznEVDTpLTMnLmD66GnPgK8N1B8kGmCqQuF"
+
+    const config = loadConfig()
+    expect(config.volumeCount).toBe(1)
+    expect(config.volumeIntervalMs).toBe(2000)
+    expect(config.injectFailureMode).toBe("")
   })
 
   it("throws when RPC_URL is missing", () => {

@@ -1,3 +1,5 @@
-export type { LifecycleStage, LifecycleEvent, LifecycleLogEntry } from "./lifecycle.js"
+export type { LifecycleStage, LifecycleEvent, LifecycleLogEntry, StageDeltas } from "./lifecycle.js"
+export { computeStageDeltas } from "./lifecycle.js"
 export type { FailureClassification, FailureDetails } from "./failure.js"
 export type { ValenceConfig } from "./config.js"
+export type { TipFloorSnapshot, TipAccounts } from "../jito/types.js"

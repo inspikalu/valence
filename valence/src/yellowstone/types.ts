@@ -16,3 +16,23 @@ export interface LatencySample {
   deltaMs: number
   timestamp: number
 }
+
+export interface TxUpdate {
+  signature: string
+  slot: bigint
+  isVote: boolean
+  index: string
+  err: unknown | null
+  timestamp: number
+}
+
+export interface TxStatusUpdate {
+  signature: string
+  slot: bigint
+  isVote: boolean
+  index: string
+  err: unknown | null
+  timestamp: number
+}
+
+export type CommitmentLevel = "processed" | "confirmed" | "finalized"

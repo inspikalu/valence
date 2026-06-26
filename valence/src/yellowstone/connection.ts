@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events"
-import type {
-  ClientDuplexStream,
-  SubscribeUpdate,
+import type { PublicKey } from "@solana/web3.js"
+import {
+  SubscribeRequest,
+  type ClientDuplexStream,
+  type SubscribeUpdate,
 } from "@triton-one/yellowstone-grpc"
 import type { SolanaRpcClient } from "../rpc/index.js"
 
@@ -23,9 +25,12 @@ import { ReconnectBackoff } from "./reconnect.js"
 import { measureLatency, shouldSample } from "./latency.js"
 import {
   buildSlotRequest,
+  buildTxFilter,
   parseSlotUpdate,
+  parseTxUpdate,
+  parseTxStatusUpdate,
 } from "./subscriptions/index.js"
-import type { SlotUpdate, YellowConfig } from "./types.js"
+import type { SlotUpdate, TxUpdate, TxStatusUpdate, YellowConfig } from "./types.js"
 
 const SAMPLE_INTERVAL = 10
 const LOG_INTERVAL = 10
@@ -38,6 +43,8 @@ export interface YellowstoneEvents {
   slotLog: [slot: bigint, timestamp: number]
   latencySample: [grpcSlot: bigint, rpcSlot: number, deltaMs: number]
   fromSlotReplay: [fromSlot: bigint]
+  txUpdate: [update: TxUpdate]
+  txStatusUpdate: [update: TxStatusUpdate]
   error: [err: Error]
 }
 
@@ -50,12 +57,17 @@ export class YellowstoneConnection extends EventEmitter {
   private lastSlot: bigint | null = null
   private slotCount = 0
   private shuttingDown = false
+  private walletPubkey: string | null = null
 
   constructor(config: YellowConfig, rpc: SolanaRpcClient) {
     super()
     this.config = config
     this.rpc = rpc
     this.backoff = new ReconnectBackoff()
+  }
+
+  setWalletPubkey(pubkey: PublicKey): void {
+    this.walletPubkey = pubkey.toBase58()
   }
 
   on<K extends keyof YellowstoneEvents>(
@@ -89,7 +101,18 @@ export class YellowstoneConnection extends EventEmitter {
 
     await client.connect()
 
-    const request = buildSlotRequest(fromSlot)
+    const slotReq = buildSlotRequest(fromSlot)
+
+    // Build the SubscribeRequest with all fields at once
+    const request = SubscribeRequest.create({
+      slots: slotReq.slots,
+      commitment: slotReq.commitment,
+      transactions: this.walletPubkey
+        ? { wallet: buildTxFilter(this.walletPubkey) }
+        : undefined,
+      ...(fromSlot !== undefined ? { fromSlot: fromSlot.toString() } : {}),
+    } as any)
+
     const stream = await client.subscribe(request)
 
     this.client = client
@@ -128,20 +151,30 @@ export class YellowstoneConnection extends EventEmitter {
   }
 
   private handleUpdate(update: SubscribeUpdate): void {
-    if (!update.slot) return
+    if (update.slot) {
+      const slotUpdate = parseSlotUpdate(update.slot)
+      this.lastSlot = slotUpdate.slot
+      this.slotCount++
 
-    const slotUpdate = parseSlotUpdate(update.slot)
-    this.lastSlot = slotUpdate.slot
-    this.slotCount++
+      if (this.slotCount % LOG_INTERVAL === 1) {
+        this.emit("slotLog", slotUpdate.slot, slotUpdate.timestamp)
+      }
 
-    if (this.slotCount % LOG_INTERVAL === 1) {
-      this.emit("slotLog", slotUpdate.slot, slotUpdate.timestamp)
+      this.emit("slot", slotUpdate)
+
+      if (shouldSample(this.slotCount, SAMPLE_INTERVAL)) {
+        this.sampleLatency(slotUpdate)
+      }
     }
 
-    this.emit("slot", slotUpdate)
+    if (update.transaction) {
+      const txUpdate = parseTxUpdate(update.transaction)
+      this.emit("txUpdate", txUpdate)
+    }
 
-    if (shouldSample(this.slotCount, SAMPLE_INTERVAL)) {
-      this.sampleLatency(slotUpdate)
+    if (update.transactionStatus) {
+      const statusUpdate = parseTxStatusUpdate(update.transactionStatus)
+      this.emit("txStatusUpdate", statusUpdate)
     }
   }
 
