@@ -16,7 +16,7 @@ June 2026).
 
 ## Required Q&A
 
-These answers are pulled from the Phase 12 lifecycle log at
+These answers are pulled from the lifecycle log at
 `src/lifecycle/log.jsonl`. Each claim is traceable to a specific log entry.
 
 ### 1. What does the time from "processed" to "confirmed" tell you about Solana network health?
@@ -39,7 +39,7 @@ in the lifecycle entry.
 The practical takeaway: for bundle-based submissions, you lose visibility
 into intermediate commitment stages. Valence compensates by measuring the
 end-to-end submitted→finalized delta (median **1,388 ms** across 4 landed
-bundles in Phase 12 run) and by using `sendTransaction` fallback for critical
+bundles) and by using `sendTransaction` fallback for critical
 transfers, which gives full stage visibility.
 
 An abnormally large processed→confirmed gap on Solana mainnet - say, >5
@@ -50,7 +50,7 @@ polling and surface it in the lifecycle log.
 ### 2. Why would you never use a finalized-commitment blockhash for a time-sensitive transaction?
 
 A `finalized`-commitment blockhash is already ~60–90 seconds old relative to
-the current slot. The Solana blockhash有效期 is ~150 slots (roughly 80 seconds
+the current slot. The Solana blockhash validity period is ~150 slots (roughly 80 seconds
 at Solana's ~400ms slot time). By the time you receive a finalized blockhash,
 the remaining window before expiry can be as low as 20–30 slots (~10–15
 seconds) - often too short for bundle submission, inflight polling, and
@@ -61,8 +61,8 @@ Valence demonstrates this empirically with its `INTENTIONAL_EXPIRY` mode
 the system fetches a blockhash at `finalized` commitment (intentionally stale).
 The resulting bundle fails with an `expired_blockhash` classification.
 
-In the Phase 12 volume run (cycle: clean → expiry → low_tip → compute_exceeded
-→ repeat), the test harness injected failures at the config level before
+In the volume run (cycle: clean → expiry → low_tip → compute_exceeded
+→ repeat), failures are injected at the config level before
 bundle construction. The lifecycle log at `src/lifecycle/log.jsonl` captures the
 injected low_tip failures (`tipLamports: 1`, `agentReasoning: "injected low_tip
 failure"`) as a representative sample of the failure injection mechanism.
@@ -90,7 +90,7 @@ Valence handles this with a **dual-strategy submission**:
    `sendTransaction` on the Block Engine. This bypasses the bundle
    pipeline entirely, sending the transaction as a regular tx.
 
-In the Phase 12 mainnet run, **every clean submission** landed via the
+In the mainnet volume run, **every clean submission** landed via the
 `sendTransaction` fallback - `sendBundle` returned `"Invalid"` on
 non-Jito-leader slots, and no leader skip was observed. The fallback path
 landed all 3 clean submissions within 2,055 ms (`submitted`→`finalized`
@@ -242,13 +242,13 @@ feature, not a temporary workaround.
 ### Jito rate limits are easy to hit
 
 The Block Engine enforces ~1 request/second/IP/region on `sendBundle`. During
-the volume run (Phase 12), submissions were spaced by `VOLUME_INTERVAL_MS`
+volume runs, submissions are spaced by `VOLUME_INTERVAL_MS`
 (default 2000ms) to stay under this limit. The tip-floor REST backstop also
 needed its own refresh interval to avoid 429s. Both are configurable.
 
 ### Intentional expiry is the highest-leverage test
 
-The `INTENTIONAL_EXPIRY` mode (Phase 8) deterministically produces a real
+The `INTENTIONAL_EXPIRY` mode deterministically produces a real
 `expired_blockhash` failure without waiting for one to occur naturally. This
 single feature exercises the failure classifier, the retry loop, the blockhash
 refresh logic, and the lifecycle tracker's failure field - all at once. It
@@ -328,11 +328,6 @@ valence/
 │       ├── reconnect.ts        # ReconnectBackoff (exponential + jitter)
 │       ├── latency.ts          # measureLatency
 │       └── leader/             # Leader schedule, window detection, horizon
-├── specs/
-│   ├── roadmap.md              # Phase tracking
-│   ├── mission.md              # Product decisions, risk posture
-│   ├── tech-stack.md           # Concrete tools + endpoints + empirical notes
-│   └── 2026-06-26-*/           # Per-phase spec directories
 ├── tests/
 │   ├── unit/                   # 17 test files, 130+ tests
 │   └── integration/            # 5 test files, full-mock cycle tests
