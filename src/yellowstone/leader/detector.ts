@@ -2,8 +2,11 @@ import { EventEmitter } from "node:events"
 import type { YellowstoneConnection } from "../connection.js"
 import type { LeaderSlot, LeaderWindow, DetectedLeader } from "./types.js"
 import { computeHorizon, updateObservedTimes } from "./horizon.js"
+import { getNextScheduledLeader } from "../../jito/searcher.js"
 
 const HORIZON_MS = 60_000
+const SUBMIT_LEAD_SLOTS = 2
+const LEADER_SLOTS = 4
 
 export interface DetectorEvents {
   leaderDetected: [leader: DetectedLeader]
@@ -21,6 +24,18 @@ export class LeaderWindowDetector extends EventEmitter {
   private previousSlot: bigint | null = null
   private previousTimestamp: number | null = null
   private lastHorizon: number | null = null
+  private firstSlotResolve: (() => void) | null = null
+  private firstSlotPromise: Promise<void>
+  private blockEngineUrl: string | null
+  private grpcNextLeader: { nextSlot: number; identity: string } | null = null
+  private grpcUpdatedAt: number = 0
+  private readonly grpcCacheTtlMs: number = 2000
+
+  async waitForFirstSlot(): Promise<void> {
+    if (this.previousSlot !== null) return
+    this.firstSlotPromise = new Promise((resolve) => { this.firstSlotResolve = resolve })
+    return this.firstSlotPromise
+  }
 
   get currentLeader(): string | null {
     if (this.previousSlot === null) return null
@@ -32,16 +47,37 @@ export class LeaderWindowDetector extends EventEmitter {
     return leader !== null && this.jitoValidatorKeys.includes(leader)
   }
 
+  get inSubmitWindow(): boolean {
+    if (this.previousSlot === null) return false
+
+    const grpcResult = this.grpcNextLeader
+    if (grpcResult && Date.now() - this.grpcUpdatedAt < this.grpcCacheTtlMs) {
+      const grpcSlot = BigInt(grpcResult.nextSlot)
+      const slotsUntil = Number(grpcSlot - this.previousSlot)
+      return slotsUntil <= SUBMIT_LEAD_SLOTS && slotsUntil > -LEADER_SLOTS
+    }
+
+    if (this.currentIsJito) return true
+    const maxLookahead = this.previousSlot + BigInt(SUBMIT_LEAD_SLOTS)
+    for (let s = this.previousSlot + BigInt(1); s <= maxLookahead; s++) {
+      const identity = this.schedule.get(s)
+      if (identity && this.isJito(identity)) return true
+    }
+    return false
+  }
 
   constructor(
     yellowstone: YellowstoneConnection,
     schedule: Map<bigint, string>,
-    jitoValidatorKeys: string[]
+    jitoValidatorKeys: string[],
+    blockEngineUrl?: string,
   ) {
     super()
     this.yellowstone = yellowstone
     this.schedule = schedule
     this.jitoValidatorKeys = jitoValidatorKeys
+    this.blockEngineUrl = blockEngineUrl ?? null
+    this.firstSlotPromise = Promise.resolve()
 
     this.yellowstone.on("slot", (update) => {
       this.onSlot(update.slot, update.timestamp)
@@ -66,6 +102,25 @@ export class LeaderWindowDetector extends EventEmitter {
     this.updateHorizon(slot, timestamp)
     this.processSchedule(slot)
     this.emitHeartbeat(slot)
+    this.fetchGrpcLeader()
+    if (this.firstSlotResolve) {
+      this.firstSlotResolve()
+      this.firstSlotResolve = null
+    }
+  }
+
+  private async fetchGrpcLeader(): Promise<void> {
+    if (!this.blockEngineUrl) return
+    try {
+      const result = await getNextScheduledLeader(this.blockEngineUrl)
+      this.grpcNextLeader = {
+        nextSlot: result.nextLeaderSlot,
+        identity: result.nextLeaderIdentity,
+      }
+      this.grpcUpdatedAt = Date.now()
+    } catch {
+      // gRPC errors are non-fatal; fall back to schedule-based detection
+    }
   }
 
   private updateHorizon(slot: bigint, timestamp: number): void {
@@ -168,6 +223,7 @@ export class LeaderWindowDetector extends EventEmitter {
         },
         slotsRemaining: nextJito.slotsRemaining,
         estimatedSeconds,
+        inSubmitWindow: this.inSubmitWindow,
       })
     } else {
       this.emit("heartbeat", {
@@ -175,6 +231,7 @@ export class LeaderWindowDetector extends EventEmitter {
         leader: { slot: BigInt(0), identity: "", isJito: false },
         slotsRemaining: 0,
         estimatedSeconds: 0,
+        inSubmitWindow: this.inSubmitWindow,
       })
     }
   }

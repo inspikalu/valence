@@ -109,11 +109,11 @@ export function loadConfig(): ValenceConfig {
   const bundleTipLamportsRaw = stripValue(process.env.BUNDLE_TIP_LAMPORTS)
   const bundleTipLamports = bundleTipLamportsRaw
     ? Number.parseInt(bundleTipLamportsRaw, 10)
-    : 1000
+    : 5000
   const finalBundleTipLamports =
     Number.isFinite(bundleTipLamports) && bundleTipLamports > 0
       ? bundleTipLamports
-      : 1000
+      : 5000
 
   const lifecycleLogPath = envOrNull(process.env.LIFECYCLE_LOG_PATH)
 
@@ -138,7 +138,7 @@ export function loadConfig(): ValenceConfig {
     : 10000
   const maxTipLamports = Number.isFinite(maxTipLamportsParsed)
     ? Math.max(1000, Math.min(100000, maxTipLamportsParsed))
-    : 10000
+    : 25000
 
   const volumeCountRaw = stripValue(process.env.VOLUME_COUNT)
   const volumeCountParsed = volumeCountRaw ? Number.parseInt(volumeCountRaw, 10) : 1

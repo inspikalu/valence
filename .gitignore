@@ -3,7 +3,9 @@ node_modules/
 *.key
 logs/*.json
 **/log.jsonl
+**/log-archive*.jsonl
 dist/
 specs/
 bounty.md
 VIDEO_SCRIPT.md
+notes/

@@ -138,6 +138,10 @@ export class YellowstoneConnection extends EventEmitter {
     return client
   }
 
+  isConnected(): boolean {
+    return this.stream !== null && this.client !== null && !this.shuttingDown
+  }
+
   async disconnect(): Promise<void> {
     this.shuttingDown = true
 

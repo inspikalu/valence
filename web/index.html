@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valence — Smart Transaction Stack</title>
+<script src="https://unpkg.com/@solana/web3.js@1/lib/index.iife.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d0d0d; color: #c0c0c0; font-family: 'JetBrains Mono', 'Fira Code', monospace; padding: 20px; }
+.card { border: 1px solid #333; border-radius: 8px; padding: 14px; margin-bottom: 12px; background: #111; }
+.card h3 { color: #5eead4; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.header { border: 1px solid #2dd4bf; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #111; }
+.header h1 { color: #2dd4bf; font-size: 20px; }
+.header span { color: #64748b; font-size: 12px; }
+.btn { background: #2dd4bf; color: #0d0d0d; border: none; padding: 8px 16px; border-radius: 6px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn:hover { background: #5eead4; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-warn { background: #d97706; }
+.btn-warn:hover { background: #f59e0b; }
+.modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); align-items:center; justify-content:center; z-index:100; }
+.modal.show { display:flex; }
+.modal-content { background:#111; border:1px solid #333; border-radius:12px; padding:24px; min-width:300px; }
+.modal-content h3 { margin-bottom:16px; }
+.wallet-opt { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; cursor:pointer; margin-bottom:4px; }
+.wallet-opt:hover { background:#1a1a1a; }
+.wallet-opt img { width:28px; height:28px; border-radius:6px; }
+.wallet-opt .name { font-size:14px; font-weight:600; color:#c0c0c0; }
+.wallet-opt .status { font-size:11px; }
+.wallet-opt .detected { color:#22c55e; } .wallet-opt .not-detected { color:#64748b; }
+input { width: 100%; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; color: #c0c0c0; font-family: inherit; font-size: 13px; margin-bottom: 8px; }
+input:focus { outline: none; border-color: #2dd4bf; }
+label { display: block; font-size: 11px; color: #64748b; margin-bottom: 3px; }
+.row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
+.label { color: #64748b; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+pre { font-size: 11px; color: #94a3b8; overflow-x: hidden; white-space: pre-wrap; }
+#walletAddr { color: #2dd4bf; font-size: 13px; word-break: break-all; }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot-green { background: #22c55e; }
+.dot-red { background: #ef4444; }
+.dot-yellow { background: #eab308; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Valence</h1>
+  <span>Smart Transaction Stack — Solana Mainnet</span>
+</div>
+
+<div class="modal" id="walletModal">
+  <div class="modal-content">
+    <h3>Select Wallet</h3>
+    <div id="walletList"></div>
+    <div style="margin-top:12px;text-align:center;">
+      <button class="btn" onclick="closeModal()" style="background:#333;color:#c0c0c0;">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Network</h3>
+    <div class="row"><span class="label">Slot</span><span id="slot">—</span></div>
+    <div class="row"><span class="label">Stream</span><span id="stream"><span class="status-dot dot-red"></span>disconnected</span></div>
+  </div>
+  <div class="card">
+    <h3>Congestion</h3>
+    <div class="row"><span class="label">Skip Rate</span><span id="skipRate">—</span></div>
+    <div class="row"><span class="label">Multiplier</span><span id="multiplier">—</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <h3 style="margin:0;">Wallet</h3>
+    <button class="btn" id="connectBtn" onclick="openWalletModal()">Connect Wallet</button>
+  </div>
+  <div id="walletAddr" style="margin-bottom:4px;">Not connected</div>
+  <div style="font-size:11px;color:#64748b;" id="walletBalance"></div>
+</div>
+
+<div class="card" id="sendCard" style="display:none;">
+  <h3>Send SOL</h3>
+  <label>Destination</label>
+  <input type="text" id="destInput" placeholder="Enter Solana address">
+  <label>Amount (SOL)</label>
+  <input type="number" id="amountInput" placeholder="0.001" step="0.0001" min="0">
+  <div style="display:flex;gap:8px;margin-top:4px;">
+    <button class="btn" id="submitBtn" onclick="submitTx()" style="flex:1;">Submit via Valence</button>
+  </div>
+  <pre id="resultArea" style="margin-top:8px;"></pre>
+</div>
+
+<div class="card" id="agentCard">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <h3 style="margin:0;">AI Agent</h3>
+    <button class="btn" id="forceBtn" onclick="forceDecision()">Force Decision</button>
+  </div>
+  <div id="forcedAgentOutput" style="font-size:12px;color:#64748b;">Click to call the live agent with current network conditions</div>
+</div>
+
+<script>
+const el = (id) => document.getElementById(id)
+
+// --- SSE stream ---
+const ev = new EventSource('/api/stream')
+ev.onmessage = (msg) => {
+  try {
+    const d = JSON.parse(msg.data)
+    el('slot').textContent = d.currentSlot ?? '—'
+    el('stream').innerHTML = d.streamConnected
+      ? '<span class="status-dot dot-green"></span>connected'
+      : '<span class="status-dot dot-red"></span>disconnected'
+    if (d.congestion) {
+      el('skipRate').textContent = (d.congestion.skipRate * 100).toFixed(1) + '%'
+      el('multiplier').textContent = 'x' + d.congestion.multiplier.toFixed(2)
+    }
+  } catch { el('slot').textContent = 'offline' }
+}
+ev.onerror = () => { el('slot').textContent = 'disconnected' }
+
+// --- Wallet ---
+let wallet
+let publicKey
+
+const WALLETS = [
+  { id:'phantom',    name:'Phantom',   detect:() => window.solana?.isPhantom,        provider:() => window.solana },
+  { id:'backpack',   name:'Backpack',  detect:() => window.solana?.isBackpack,       provider:() => window.solana },
+  { id:'solflare',   name:'Solflare',  detect:() => window.solana?.isSolflare,       provider:() => window.solana },
+  { id:'glow',       name:'Glow',      detect:() => window.solana?.isGlow,           provider:() => window.solana },
+  { id:'okx',        name:'OKX Wallet',detect:() => window.solana?.isOkxWallet,      provider:() => window.solana },
+  { id:'trust',      name:'Trust',     detect:() => window.solana?.isTrust,           provider:() => window.solana },
+  { id:'backpack2',  name:'Backpack (legacy)', detect:() => window.backpack,          provider:() => window.backpack?.solana },
+]
+
+function openWalletModal() {
+  const list = el('walletList')
+  list.innerHTML = WALLETS.map(w => {
+    const detected = w.detect()
+    return '<div class="wallet-opt" onclick="connectWallet(\'' + w.id + '\')">'
+      + '<span style="width:28px;height:28px;border-radius:6px;background:#1a1a1a;display:flex;align-items:center;justify-content:center;font-size:14px;">' + w.name[0] + '</span>'
+      + '<div><div class="name">' + w.name + '</div>'
+      + '<div class="status ' + (detected ? 'detected' : 'not-detected') + '">' + (detected ? 'Detected' : 'Not installed') + '</div></div></div>'
+  }).join('')
+  el('walletModal').classList.add('show')
+}
+
+function closeModal() { el('walletModal').classList.remove('show') }
+
+async function connectWallet(walletId) {
+  closeModal()
+  const w = WALLETS.find(x => x.id === walletId)
+  if (!w) return
+  const provider = w.provider()
+  if (!provider) {
+    el('walletAddr').textContent = w.name + ' not found — install the extension'
+    return
+  }
+  try {
+    const resp = await provider.connect()
+    publicKey = resp.publicKey.toString()
+    wallet = provider
+    el('connectBtn').textContent = w.name + ' ✓'
+    el('connectBtn').onclick = disconnectWallet
+    el('connectBtn').className = 'btn btn-warn'
+    el('walletAddr').textContent = publicKey
+    el('sendCard').style.display = 'block'
+    updateBalance()
+  } catch (err) {
+    el('walletAddr').textContent = 'Connection rejected'
+  }
+}
+
+async function updateBalance() {
+  try {
+    const res = await fetch('/api/balance?address=' + encodeURIComponent(publicKey))
+    const data = await res.json()
+    el('walletBalance').textContent = 'Balance: ' + (data.sol || 0).toFixed(4) + ' SOL'
+  } catch { el('walletBalance').textContent = 'Balance: —' }
+}
+
+async function disconnectWallet() {
+  try { await wallet.disconnect() } catch {}
+  publicKey = null
+  wallet = null
+  el('connectBtn').textContent = 'Connect Wallet'
+  el('connectBtn').onclick = connectWallet
+  el('connectBtn').className = 'btn'
+  el('walletAddr').textContent = 'Not connected'
+  el('walletBalance').textContent = ''
+  el('sendCard').style.display = 'none'
+}
+
+// --- Submit ---
+async function submitTx() {
+  const dest = el('destInput').value.trim()
+  const amount = parseFloat(el('amountInput').value)
+  if (!dest || !amount || amount <= 0) {
+    el('resultArea').textContent = 'Enter a valid destination and amount'
+    return
+  }
+  const btn = el('submitBtn')
+  btn.disabled = true
+  btn.textContent = 'Building tx…'
+  try {
+    // 1. Get fresh blockhash
+    const bhResp = await fetch('/api/blockhash')
+    const bh = await bhResp.json()
+
+    // 2. Build the transaction
+    const fromPubkey = new solanaWeb3.PublicKey(publicKey)
+    const toPubkey = new solanaWeb3.PublicKey(dest)
+    const tx = new solanaWeb3.Transaction({
+      feePayer: fromPubkey,
+      recentBlockhash: bh.blockhash,
+    })
+    tx.add(solanaWeb3.SystemProgram.transfer({ fromPubkey, toPubkey, lamports: amount * 1e9 }))
+
+    btn.textContent = 'Sign in wallet…'
+    const signed = await wallet.signTransaction(tx)
+
+    // 3. Serialize to base64 and submit to backend
+    const bytes = signed.serialize()
+    const txBase64 = btoa(String.fromCharCode(...new Uint8Array(bytes)))
+    btn.textContent = 'Submitting…'
+    const subResp = await fetch('/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction: txBase64, urgency: 'medium' }),
+    })
+    const result = await subResp.json()
+    if (result.landed) {
+      el('resultArea').innerHTML = '<span style="color:#22c55e;">Landed!</span> Signature: ' + result.signature
+    } else {
+      el('resultArea').innerHTML = '<span style="color:#ef4444;">Failed</span> ' + (result.error || result.failureClass || 'Unknown error')
+    }
+  } catch (err) {
+    el('resultArea').textContent = 'Error: ' + (err.message || String(err))
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Submit via Valence'
+  }
+}
+
+// --- Force Agent Decision ---
+async function forceDecision() {
+  const btn = el('forceBtn')
+  const out = el('forcedAgentOutput')
+  btn.disabled = true
+  btn.textContent = 'Thinking…'
+  out.textContent = 'Calling AI agent…'
+  try {
+    const res = await fetch('/api/agent-decision', { method: 'POST' })
+    const data = await res.json()
+    if (data.error) {
+      out.innerHTML = '<span style="color:#ef4444;">Error: ' + data.error + '</span>'
+    } else {
+      out.innerHTML = '<span style="color:#2dd4bf;font-weight:700;">' + data.tipLamports.toLocaleString() + ' lamports</span>'
+        + '<br><span style="color:#94a3b8;">' + data.reasoning + '</span>'
+    }
+  } catch (e) {
+    out.innerHTML = '<span style="color:#ef4444;">Request failed: ' + e.message + '</span>'
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Force Decision'
+  }
+}
+</script>
+</body>
+</html>

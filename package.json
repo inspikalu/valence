@@ -1,24 +1,36 @@
 {
   "name": "valence",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "sdk": "tsx src/sdk/valence.ts",
+    "server": "tsx src/server.ts",
+    "server:watch": "tsx watch src/server.ts",
+    "cli": "tsx src/cli.ts",
     "test": "vitest",
     "test:run": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "evidence-validate": "tsx src/cli.ts evidence-validate",
+    "evidence-report": "tsx src/cli.ts evidence-report",
+    "evidence-package": "tsx src/cli.ts evidence-package",
+    "evidence-readiness": "tsx src/cli.ts evidence-readiness",
+    "preflight": "tsx src/cli.ts preflight"
   },
   "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
     "@solana/web3.js": "^1.98.0",
     "@solsdk/jito-ts": "^4.2.2",
     "@triton-one/yellowstone-grpc": "^5.0.9",
     "bs58": "^6.0.0",
     "dotenv": "^16.4.7",
     "jito-js-rpc": "^0.2.2",
+    "jito-ts": "^4.2.1",
     "ws": "^8.21.0"
   },
   "devDependencies": {

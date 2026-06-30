@@ -2,10 +2,13 @@ import type { LifecycleEvent, LifecycleStage } from "../types/lifecycle.js"
 
 type CommitmentLevel = "processed" | "confirmed" | "finalized"
 
+interface StageObservation {
+  slot: bigint
+  timestamp: number
+}
+
 interface TrackerEntry {
-  firstSeenSlot: bigint
-  firstSeenTimestamp: number
-  commitment: CommitmentLevel
+  stages: Partial<Record<CommitmentLevel, StageObservation>>
   updatedAt: number
 }
 
@@ -18,16 +21,20 @@ interface BundleRecord {
   submittedTimestamp: number
 }
 
+const COMMITMENT_ORDER: CommitmentLevel[] = ["processed", "confirmed", "finalized"]
+
+const SLOT_FINALIZED_STATUS = "root" as const
+export type SlotStatus = "processed" | "confirmed" | typeof SLOT_FINALIZED_STATUS
+
 export class SignatureTracker {
   private watched = new Map<string, TrackerEntry>()
   private bundles = new Map<string, BundleRecord>()
+  private landedSlots = new Map<bigint, Set<string>>()
 
   watch(signature: string): void {
     if (!this.watched.has(signature)) {
       this.watched.set(signature, {
-        firstSeenSlot: BigInt(0),
-        firstSeenTimestamp: 0,
-        commitment: "processed",
+        stages: {},
         updatedAt: 0,
       })
     }
@@ -41,17 +48,32 @@ export class SignatureTracker {
     const entry = this.watched.get(signature)
     if (!entry) return
 
-    if (entry.firstSeenSlot === BigInt(0)) {
-      entry.firstSeenSlot = slot
-      entry.firstSeenTimestamp = Date.now()
-    }
-
-    const levels: CommitmentLevel[] = ["processed", "confirmed", "finalized"]
-    if (levels.indexOf(commitment) > levels.indexOf(entry.commitment)) {
-      entry.commitment = commitment
+    if (!entry.stages[commitment]) {
+      entry.stages[commitment] = { slot, timestamp: Date.now() }
+      if (commitment === "processed") {
+        let sigs = this.landedSlots.get(slot)
+        if (!sigs) {
+          sigs = new Set()
+          this.landedSlots.set(slot, sigs)
+        }
+        sigs.add(signature)
+      }
     }
 
     entry.updatedAt = Date.now()
+  }
+
+  promoteSlot(slot: bigint, commitment: "confirmed" | "finalized"): void {
+    const sigs = this.landedSlots.get(slot)
+    if (!sigs) return
+    for (const sig of sigs) {
+      const entry = this.watched.get(sig)
+      if (!entry) continue
+      if (!entry.stages[commitment]) {
+        entry.stages[commitment] = { slot, timestamp: Date.now() }
+      }
+      entry.updatedAt = Date.now()
+    }
   }
 
   recordSubmitted(
@@ -92,22 +114,43 @@ export class SignatureTracker {
         failure: null,
       })
 
-      const status = this.getStatus(sig)
-      if (status && status.firstSeenSlot > BigInt(0)) {
-        events.push({
-          bundleId,
-          signature: sig,
-          stage: status.commitment as LifecycleStage,
-          slot: Number(status.firstSeenSlot),
-          timestamp: status.firstSeenTimestamp,
-          tipLamports: record.tipLamports,
-          agentReasoning: record.agentReasoning,
-          failure: null,
-        })
+      const entry = this.watched.get(sig)
+      if (entry) {
+        for (const level of COMMITMENT_ORDER) {
+          const obs = entry.stages[level]
+          if (obs) {
+            events.push({
+              bundleId,
+              signature: sig,
+              stage: level as LifecycleStage,
+              slot: Number(obs.slot),
+              timestamp: obs.timestamp,
+              tipLamports: record.tipLamports,
+              agentReasoning: record.agentReasoning,
+              failure: null,
+            })
+          }
+        }
       }
     }
 
     return events
+  }
+
+  private highestCommitment(entry: TrackerEntry): CommitmentLevel {
+    for (let i = COMMITMENT_ORDER.length - 1; i >= 0; i--) {
+      const level = COMMITMENT_ORDER[i]!
+      if (entry.stages[level]) return level
+    }
+    return "processed"
+  }
+
+  private firstObservation(entry: TrackerEntry): { slot: bigint; timestamp: number } | null {
+    for (const level of COMMITMENT_ORDER) {
+      const obs = entry.stages[level]
+      if (obs) return obs
+    }
+    return null
   }
 
   getStatus(signature: string): {
@@ -118,7 +161,14 @@ export class SignatureTracker {
   } | null {
     const entry = this.watched.get(signature)
     if (!entry) return null
-    return { ...entry }
+
+    const first = this.firstObservation(entry)
+    return {
+      firstSeenSlot: first?.slot ?? BigInt(0),
+      firstSeenTimestamp: first?.timestamp ?? 0,
+      commitment: this.highestCommitment(entry),
+      updatedAt: entry.updatedAt,
+    }
   }
 
   has(signature: string): boolean {

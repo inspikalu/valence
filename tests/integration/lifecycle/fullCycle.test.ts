@@ -71,8 +71,12 @@ describe("full lifecycle integration", () => {
     expect(stages.has("confirmed")).toBe(true)
     expect(stages.has("finalized")).toBe(true)
 
-    // Total events = 1 submitted per sig + 1 observed per sig = 6
-    expect(parsed.events).toHaveLength(6)
+    // Now each sig emits an event per observed stage (not just the highest).
+    // sig-processed: submitted + processed                 = 2
+    // sig-confirmed: submitted + processed + confirmed     = 3
+    // sig-finalized: submitted + processed + confirmed + finalized = 4
+    // Total: 2 + 3 + 4 = 9
+    expect(parsed.events).toHaveLength(9)
 
     // stageDeltas should have computed values (non-null) for all pairs
     const deltas = parsed.stageDeltas

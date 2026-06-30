@@ -9,6 +9,7 @@ export interface LeaderWindow {
   leader: LeaderSlot
   slotsRemaining: number
   estimatedSeconds: number
+  inSubmitWindow: boolean
 }
 
 export interface DetectedLeader {

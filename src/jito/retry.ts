@@ -1,9 +1,9 @@
-import { Keypair, Transaction, SystemProgram, PublicKey } from "@solana/web3.js"
+import { Keypair, VersionedTransaction, TransactionMessage, SystemProgram, PublicKey } from "@solana/web3.js"
 import bs58 from "bs58"
 import type { ValenceConfig, FailureClassification } from "../types/index.js"
 import type { SolanaRpcClient } from "../rpc/index.js"
 import { SignatureTracker } from "../lifecycle/index.js"
-import { buildSelfTransferBundle } from "./bundle.js"
+import { buildSelfTransferTipBundle } from "./bundle.js"
 import { submitBundle, sendViaBlockEngine } from "./submission.js"
 import { getInflightBundleStatuses, getBundleStatuses } from "./bundleStatus.js"
 import { classifyFailure } from "./failureClassifier.js"
@@ -132,7 +132,7 @@ export async function retryBundleSubmission(
 
     await sleep(1_000)
 
-    const { bundle, signatures, transactions } = buildSelfTransferBundle(
+    const { bundle, signatures, transactions } = buildSelfTransferTipBundle(
       wallet,
       tipAccount,
       freshBlockhash.blockhash,
@@ -156,81 +156,105 @@ export async function retryBundleSubmission(
       continue
     }
 
-    console.log(`[retry] submitting via sendBundle...`)
-    let bundleId: string
-    try {
-      bundleId = await submitBundle(config.jitoBlockEngineUrl, bundle)
-    } catch (err) {
-      const details = classifyFailure(err)
-      console.warn(`[retry] submitBundle failed: ${details.classification} — ${details.originalError.slice(0, 120)}`)
-      currentFailure = details.classification
-      continue
-    }
-    tracker.recordSubmitted(retryBundleId, signatures, clampedTip, currentSlot, agentOutput.reasoning)
-    console.log(`[retry] bundle submitted — id: ${bundleId}, sigs: ${signatures.join(", ")}`)
-
-    let pollCount = 0
-    for (; pollCount < 20; pollCount++) {
-      await sleep(1_250)
+    let bundleId: string | undefined
+    if (extras?.inSubmitWindow ?? true) {
+      console.log(`[retry] submitting via sendBundle...`)
       try {
-        const inflight = await getInflightBundleStatuses(config.jitoBlockEngineUrl, bundleId)
-        for (const s of inflight) {
-          console.log(`[retry] inflight #${pollCount + 1}: ${s.status} landed_slot=${s.landed_slot ?? "n/a"}`)
-          if (s.status === "Landed") {
-            pollCount = 99
-          }
-        }
+        bundleId = await submitBundle(config.jitoBlockEngineUrl, bundle)
       } catch (err) {
-        console.error(`[retry] status poll error: ${err instanceof Error ? err.message : String(err)}`)
+        const details = classifyFailure(err)
+        console.warn(`[retry] submitBundle failed: ${details.classification} — ${details.originalError.slice(0, 120)}`)
+        currentFailure = details.classification
       }
+    } else {
+      console.log(`[retry] no Jito leader in submit window — skipping sendBundle, falling back to sendTransaction`)
     }
 
-    if (pollCount >= 99) {
-      await sleep(1_250)
-      const statuses = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
-      for (const s of statuses) {
-        if (s.transactions) {
-          for (const tx of s.transactions) {
-            if (tx.err !== null) {
-              const details = classifyFailure(tx.err)
-              console.warn(`[retry] tx ${tx.signature.slice(0, 16)}.. error: ${details.classification}`)
+    if (bundleId) {
+      tracker.recordSubmitted(retryBundleId, signatures, clampedTip, currentSlot, agentOutput.reasoning)
+      console.log(`[retry] bundle submitted — id: ${bundleId}, sigs: ${signatures.join(", ")}`)
+
+      let bundleLanded = false
+      let pollCount = 0
+      for (; pollCount < 20; pollCount++) {
+        await sleep(1_250)
+        try {
+          const inflight = await getInflightBundleStatuses(config.jitoBlockEngineUrl, bundleId)
+          for (const s of inflight) {
+            console.log(`[retry] inflight #${pollCount + 1}: ${s.status} landed_slot=${s.landed_slot ?? "n/a"}`)
+            if (s.status === "Landed") {
+              bundleLanded = true
+              pollCount = 99
+            } else if (s.status === "Invalid" || s.status === "Failed") {
+              try {
+                const details = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
+                for (const d of details) {
+                  if (d.transactions) {
+                    for (const tx of d.transactions) {
+                      console.log(`[retry] tx ${tx.signature.slice(0, 16)}.. slot=${tx.slot} err=${JSON.stringify(tx.err)}`)
+                    }
+                  }
+                }
+              } catch {
+                // best-effort
+              }
+              pollCount = 99
+            }
+          }
+        } catch (err) {
+          console.error(`[retry] status poll error: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+
+      if (bundleLanded) {
+        await sleep(1_250)
+        const statuses = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
+        for (const s of statuses) {
+          if (s.transactions) {
+            for (const tx of s.transactions) {
+              if (tx.err !== null) {
+                const details = classifyFailure(tx.err)
+                console.warn(`[retry] tx ${tx.signature.slice(0, 16)}.. error: ${details.classification}`)
+              }
             }
           }
         }
+
+        for (const sig of signatures) {
+          await pollUntilProcessed(rpc, tracker, sig)
+        }
+        for (const sig of signatures) {
+          await pollUntilFinalized(rpc, tracker, sig)
+        }
+
+        console.log(`[retry] bundle landed on attempt ${attempt}`)
+        return { success: true, finalBundleId: retryBundleId }
       }
 
-      for (const sig of signatures) {
-        await pollUntilProcessed(rpc, tracker, sig)
-      }
-      for (const sig of signatures) {
-        await pollUntilFinalized(rpc, tracker, sig)
-      }
-
-      console.log(`[retry] bundle landed on attempt ${attempt}`)
-      return { success: true, finalBundleId: retryBundleId }
+      console.log(`[retry] bundle not landed, falling back to sendTransaction...`)
     }
 
-    console.log(`[retry] bundle not landed, falling back to sendTransaction...`)
+    const combinedMessage = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: freshBlockhash.blockhash,
+      instructions: [
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: wallet.publicKey,
+          lamports: 0,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: new PublicKey(tipAccount),
+          lamports: clampedTip,
+        }),
+      ],
+    }).compileToV0Message()
+    const combinedTx = new VersionedTransaction(combinedMessage)
+    combinedTx.sign([wallet])
 
-    const combinedTx = new Transaction()
-    combinedTx.add(
-      SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey: wallet.publicKey,
-        lamports: 0,
-      }),
-      SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey: new PublicKey(tipAccount),
-        lamports: clampedTip,
-      }),
-    )
-    combinedTx.recentBlockhash = freshBlockhash.blockhash
-    combinedTx.feePayer = wallet.publicKey
-    combinedTx.sign(wallet)
-
-    const combinedB64 = combinedTx.serialize({ verifySignatures: false }).toString("base64")
-    const combinedSig = bs58.encode(combinedTx.signature!)
+    const combinedB64 = Buffer.from(combinedTx.serialize()).toString("base64")
+    const combinedSig = bs58.encode(combinedTx.signatures[0]!)
     console.log(`[retry] submitting via sendTransaction — sig=${combinedSig}`)
 
     const simResult = await connection.simulateTransaction(combinedTx)

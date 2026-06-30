@@ -46,7 +46,7 @@ describe("LeaderWindowDetector", () => {
     const detector = new LeaderWindowDetector(
       yellowstone as any,
       makeSchedule(),
-      JITO_KEYS
+      JITO_KEYS,
     )
 
     const detected: DetectedLeader[] = []
@@ -67,7 +67,7 @@ describe("LeaderWindowDetector", () => {
     const detector = new LeaderWindowDetector(
       yellowstone as any,
       makeSchedule(),
-      JITO_KEYS
+      JITO_KEYS,
     )
 
     const detected: DetectedLeader[] = []
@@ -93,7 +93,7 @@ describe("LeaderWindowDetector", () => {
     const detector = new LeaderWindowDetector(
       yellowstone as any,
       makeSchedule(),
-      JITO_KEYS
+      JITO_KEYS,
     )
 
     const entered: LeaderSlot[] = []
@@ -115,7 +115,7 @@ describe("LeaderWindowDetector", () => {
     const detector = new LeaderWindowDetector(
       yellowstone as any,
       makeSchedule(),
-      JITO_KEYS
+      JITO_KEYS,
     )
 
     const passed: LeaderSlot[] = []
@@ -138,7 +138,7 @@ describe("LeaderWindowDetector", () => {
     const detector = new LeaderWindowDetector(
       yellowstone as any,
       makeSchedule(),
-      JITO_KEYS
+      JITO_KEYS,
     )
 
     const heartbeats: any[] = []
@@ -167,5 +167,19 @@ describe("LeaderWindowDetector", () => {
 
     expect(heartbeats[0]!.leader.slot).toBe(BigInt(0))
     expect(heartbeats[0]!.leader.identity).toBe("")
+  })
+
+  it("returns correct inSubmitWindow based on schedule when no gRPC", () => {
+    const yellowstone = new FakeYellowstone()
+    const detector = new LeaderWindowDetector(
+      yellowstone as any,
+      makeSchedule(),
+      JITO_KEYS,
+    )
+
+    expect(detector.inSubmitWindow).toBe(false)
+
+    yellowstone.emitSlot(101, 400)
+    expect(detector.inSubmitWindow).toBe(true)
   })
 })

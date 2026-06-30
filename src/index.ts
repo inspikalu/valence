@@ -4,9 +4,9 @@ import { createRpcClient } from "./rpc/index.js"
 import { YellowstoneConnection } from "./yellowstone/index.js"
 import { fetchLeaderSchedule, LeaderWindowDetector } from "./yellowstone/leader/index.js"
 import { SignatureTracker, appendToLog, createLifecycleLogEntry, DEFAULT_LOG_PATH } from "./lifecycle/index.js"
-import { Transaction, SystemProgram, sendAndConfirmTransaction, PublicKey } from "@solana/web3.js"
+import { VersionedTransaction, TransactionMessage, Transaction, SystemProgram, sendAndConfirmTransaction, PublicKey } from "@solana/web3.js"
 import bs58 from "bs58"
-import { createTipFloorStore, getTipAccounts, TipAccountSelector, TipStreamClient, buildSelfTransferBundle, submitBundle, sendViaBlockEngine, getBundleStatuses, getInflightBundleStatuses, classifyFailure, classifyBundleStatus, retryBundleSubmission } from "./jito/index.js"
+import { createTipFloorStore, getTipAccounts, TipAccountSelector, TipStreamClient, buildSelfTransferBundle, buildSelfTransferTipBundle, submitBundle, sendViaBlockEngine, getBundleStatuses, getInflightBundleStatuses, classifyFailure, classifyBundleStatus, retryBundleSubmission } from "./jito/index.js"
 import type { TipFloorSnapshot } from "./jito/index.js"
 import { callTipAgent } from "./agent/index.js"
 import type { AgentOutput } from "./agent/index.js"
@@ -69,10 +69,11 @@ export async function runBundleSubmission(
   wallet: ReturnType<typeof loadWallet>,
   rpc: ReturnType<typeof createRpcClient>,
   tracker: SignatureTracker,
-  extras?: {
+    extras?: {
     tipFloorSnapshot?: TipFloorSnapshot | null
     leaderIdentity?: string | null
     isJitoLeader?: boolean
+    inSubmitWindow?: boolean
     injectFailureMode?: InjectFailureMode | null
   },
 ): Promise<{ success: boolean }> {
@@ -122,15 +123,20 @@ export async function runBundleSubmission(
   } else {
     tipAmount = Math.max(1000, Math.min(config.maxTipLamports, agentOutput.tipLamports))
   }
+  // Force high tip to test auction competitiveness
+  if (!extras?.injectFailureMode) {
+    tipAmount = 50000
+    console.log(`[test] FORCING tip to ${tipAmount} lamports for bundle competitiveness test`)
+  }
 
   const computeUnitLimit = extras?.injectFailureMode === "compute_exceeded" ? 1 : undefined
   if (computeUnitLimit !== undefined) {
     console.log("[volume] injecting compute_exceeded failure — setting computeUnitLimit to 1")
   }
 
-  console.log(`[bundle] building bundle with tip=${tipAmount} lamports to ${tipAccount}`)
+  console.log(`[bundle] building single-tx bundle with tip=${tipAmount} lamports to ${tipAccount}`)
 
-  const { bundle, signatures, transactions } = buildSelfTransferBundle(
+  const { bundle, signatures, transactions } = buildSelfTransferTipBundle(
     wallet,
     tipAccount,
     freshBlockhash.blockhash,
@@ -163,18 +169,25 @@ export async function runBundleSubmission(
   }
 
   // Try sendBundle first; if it lands, great. If not, fall back to sendTransaction.
+  // Only attempt sendBundle if we're inside a Jito leader window (or window status is unknown).
   landedSig = null
   combinedSig = undefined
+  let bundleLanded = false
 
-  console.log(`[bundle] submitting via sendBundle...`)
-  try {
-    bundleId = await submitBundle(config.jitoBlockEngineUrl, bundle)
-  } catch (err) {
-    if (!bundleFailure) {
-      const details = classifyFailure(err, { slot: currentSlot })
-      bundleFailure = details.classification
+  const inSubmitWindow = extras?.inSubmitWindow ?? true
+  if (inSubmitWindow) {
+    console.log(`[bundle] submitting via sendBundle...`)
+    try {
+      bundleId = await submitBundle(config.jitoBlockEngineUrl, bundle)
+    } catch (err) {
+      if (!bundleFailure) {
+        const details = classifyFailure(err, { slot: currentSlot })
+        bundleFailure = details.classification
+      }
+      console.warn(`[bundle] sendBundle failed — classified: ${bundleFailure}`)
     }
-    console.warn(`[bundle] sendBundle failed — classified: ${bundleFailure}`)
+  } else {
+    console.log(`[bundle] no Jito leader in submit window — skipping sendBundle, falling back to sendTransaction`)
   }
   if (bundleId) {
     tracker.recordSubmitted(bundleId, signatures, tipAmount, currentSlot, agentOutput.reasoning)
@@ -189,6 +202,22 @@ export async function runBundleSubmission(
         for (const s of inflight) {
           console.log(`[bundle] inflight #${pollCount + 1}: ${s.status} landed_slot=${s.landed_slot ?? "n/a"}`)
           if (s.status === "Landed") {
+            bundleLanded = true
+            pollCount = 99
+          } else if (s.status === "Invalid" || s.status === "Failed") {
+            // Terminal status — fetch detailed bundle info and stop polling
+            try {
+              const details = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
+              for (const d of details) {
+                if (d.transactions) {
+                  for (const tx of d.transactions) {
+                    console.log(`[bundle] tx ${tx.signature.slice(0, 16)}.. slot=${tx.slot} err=${JSON.stringify(tx.err)}`)
+                  }
+                }
+              }
+            } catch {
+              // best-effort
+            }
             pollCount = 99
           }
         }
@@ -197,7 +226,7 @@ export async function runBundleSubmission(
       }
     }
 
-    if (pollCount >= 99) {
+    if (bundleLanded) {
       // Bundle landed — get final status
       await sleep(1_250)
       const statuses = await getBundleStatuses(config.jitoBlockEngineUrl, bundleId)
@@ -228,30 +257,33 @@ export async function runBundleSubmission(
     }
   }
 
-  if (!bundleId || pollCount < 99) {
+  if (!bundleLanded) {
     // Bundle didn't land — fall back to sendTransaction
-    console.log(`[bundle] bundle not landed after ${pollCount * 1.25}s, falling back to sendTransaction...`)
+    const elapsed = Math.max(1, pollCount) * 1.25
+    console.log(`[bundle] bundle not landed after ${elapsed}s, falling back to sendTransaction...`)
 
-    // Build a single transaction with both self-transfer and tip
-    const combinedTx = new Transaction()
-    combinedTx.add(
-      SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey: wallet.publicKey,
-        lamports: 0,
-      }),
-      SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey: new PublicKey(tipAccount),
-        lamports: tipAmount,
-      }),
-    )
-    combinedTx.recentBlockhash = freshBlockhash.blockhash
-    combinedTx.feePayer = wallet.publicKey
-    combinedTx.sign(wallet)
+    // Build a single v0 transaction with both self-transfer and tip
+    const combinedMessage = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: freshBlockhash.blockhash,
+      instructions: [
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: wallet.publicKey,
+          lamports: 0,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: new PublicKey(tipAccount),
+          lamports: tipAmount,
+        }),
+      ],
+    }).compileToV0Message()
+    const combinedTx = new VersionedTransaction(combinedMessage)
+    combinedTx.sign([wallet])
 
-    const combinedB64 = combinedTx.serialize({ verifySignatures: false }).toString("base64")
-    combinedSig = bs58.encode(combinedTx.signature!)
+    const combinedB64 = Buffer.from(combinedTx.serialize()).toString("base64")
+    combinedSig = bs58.encode(combinedTx.signatures[0]!)
     console.log(`[bundle] submitting via sendTransaction — sig=${combinedSig}`)
 
     // Simulate before sending
@@ -348,7 +380,7 @@ export async function runBundleSubmission(
     const retryResult = await retryBundleSubmission(
       config, wallet, rpc, tracker, usedBundleId, bundleFailure,
       tipAmount, agentOutput.reasoning,
-      { tipFloorSnapshot: extras?.tipFloorSnapshot ?? null, leaderIdentity: extras?.leaderIdentity ?? null, isJitoLeader: extras?.isJitoLeader ?? false },
+      { tipFloorSnapshot: extras?.tipFloorSnapshot ?? null, leaderIdentity: extras?.leaderIdentity ?? null, isJitoLeader: extras?.isJitoLeader ?? false, inSubmitWindow: extras?.inSubmitWindow ?? true },
     )
     console.log(`[retry] result: ${retryResult.success ? "success" : "failed"} after retries`)
 
@@ -377,10 +409,9 @@ async function runVolumeSubmissions(
   wallet: ReturnType<typeof loadWallet>,
   rpc: ReturnType<typeof createRpcClient>,
   tracker: SignatureTracker,
-  extras?: {
+    opts: {
     tipFloorSnapshot?: TipFloorSnapshot | null
-    leaderIdentity?: string | null
-    isJitoLeader?: boolean
+    detector?: LeaderWindowDetector
   },
 ): Promise<void> {
   let successCount = 0
@@ -401,7 +432,10 @@ async function runVolumeSubmissions(
     console.log(`[volume] submission ${i + 1}/${config.volumeCount} — mode: ${injectFailureMode ?? "clean"}`)
     try {
       const result = await runBundleSubmission(runConfig, wallet, rpc, tracker, {
-        ...extras,
+        tipFloorSnapshot: opts.tipFloorSnapshot ?? null,
+        leaderIdentity: opts.detector?.currentLeader ?? null,
+        isJitoLeader: opts.detector?.currentIsJito ?? false,
+        inSubmitWindow: opts.detector?.inSubmitWindow ?? true,
         injectFailureMode,
       })
       if (result.success) {
@@ -533,6 +567,17 @@ async function main() {
       )
     })
 
+    // Promote bundles via slot-level commitment progression (solguard pattern).
+    // When a slot reaches confirmed/finalized, any tx that landed in that slot
+    // advances to the corresponding stage without needing RPC polling.
+    yellowstone.on("slot", (update) => {
+      if (update.status === "confirmed") {
+        tracker.promoteSlot(update.slot, "confirmed")
+      } else if (update.status === "root") {
+        tracker.promoteSlot(update.slot, "finalized")
+      }
+    })
+
     try {
       await yellowstone.connect()
     } catch (err) {
@@ -556,7 +601,7 @@ async function main() {
     )
     console.log(`[leader] schedule loaded: ${schedule.size} leaders, ${jitoCount} Jito-Solana validators`)
 
-    const detector = new LeaderWindowDetector(yellowstone, schedule, jitoKeys)
+    const detector = new LeaderWindowDetector(yellowstone, schedule, jitoKeys, config.jitoBlockEngineUrl)
 
     detector.on("leaderDetected", (leader) => {
       console.log(
@@ -612,17 +657,18 @@ async function main() {
     }
 
     if (config.sendBundle) {
+      await detector.waitForFirstSlot()
       if (config.volumeCount > 1) {
         await runVolumeSubmissions(config, wallet, rpc, tracker, {
           tipFloorSnapshot: tipStore?.get() ?? null,
-          leaderIdentity: detector.currentLeader,
-          isJitoLeader: detector.currentIsJito,
+          detector,
         })
       } else {
         await runBundleSubmission(config, wallet, rpc, tracker, {
           tipFloorSnapshot: tipStore?.get() ?? null,
           leaderIdentity: detector.currentLeader,
           isJitoLeader: detector.currentIsJito,
+          inSubmitWindow: detector.inSubmitWindow,
         })
       }
     }

@@ -76,16 +76,17 @@ function mockFetchForSuccess(): void {
 }
 
 function mockFetchForExhaustion(): void {
-  let callCount = 0
   vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
     const urlStr = typeof url === "string" ? url : url.toString()
-    callCount++
 
     if (urlStr.includes("/getTipAccounts")) {
       return { ok: true, json: async () => ({ jsonrpc: "2.0", id: 1, result: [TIP_ACCOUNT] }) } as Response
     }
-    // Make submitBundle fail fast so retry continues without long polls
+    // Fail submitBundle AND sendViaBlockEngine so retry exhausts all attempts
     if (urlStr.includes("/bundles") && !urlStr.includes("Status")) {
+      return { ok: false, status: 500, statusText: "Server Error", text: async () => "server error" } as unknown as Response
+    }
+    if (urlStr.includes("/api/v1/transactions")) {
       return { ok: false, status: 500, statusText: "Server Error", text: async () => "server error" } as unknown as Response
     }
     return { ok: true, json: async () => ({}) } as Response

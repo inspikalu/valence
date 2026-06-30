@@ -115,30 +115,21 @@ describe("getTipAccounts", () => {
 })
 
 describe("TipAccountSelector", () => {
-  it("round-robins through all accounts", () => {
-    const selector = new TipAccountSelector(MOCK_VALID_ACCOUNTS, 0)
-    for (let i = 0; i < MOCK_VALID_ACCOUNTS.length; i++) {
-      expect(selector.next()).toBe(MOCK_VALID_ACCOUNTS[i])
+  it("returns random accounts on each call (non-deterministic)", () => {
+    const selector = new TipAccountSelector(MOCK_VALID_ACCOUNTS)
+    const results = new Set<string>()
+    for (let i = 0; i < 100; i++) {
+      const account = selector.next()
+      expect(MOCK_VALID_ACCOUNTS).toContain(account)
+      results.add(account)
     }
+    expect(results.size).toBeGreaterThan(1)
   })
 
-  it("wraps around after the last account", () => {
-    const selector = new TipAccountSelector(MOCK_VALID_ACCOUNTS, 0)
-    for (let i = 0; i < MOCK_VALID_ACCOUNTS.length; i++) {
-      selector.next()
-    }
-    expect(selector.next()).toBe(MOCK_VALID_ACCOUNTS[0])
-  })
-
-  it("starts at the given offset", () => {
-    const selector = new TipAccountSelector(MOCK_VALID_ACCOUNTS, 3)
-    expect(selector.next()).toBe(MOCK_VALID_ACCOUNTS[3])
-    expect(selector.next()).toBe(MOCK_VALID_ACCOUNTS[4])
-  })
-
-  it("wraps start offset correctly", () => {
-    const selector = new TipAccountSelector(MOCK_VALID_ACCOUNTS, 8)
-    expect(selector.next()).toBe(MOCK_VALID_ACCOUNTS[0])
+  it("returns valid account from the list", () => {
+    const selector = new TipAccountSelector(MOCK_VALID_ACCOUNTS)
+    const account = selector.next()
+    expect(MOCK_VALID_ACCOUNTS).toContain(account)
   })
 
   it("getAccounts returns a copy of the accounts list", () => {

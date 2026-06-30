@@ -24,4 +24,5 @@ export interface RetryExtras {
   tipFloorSnapshot?: TipFloorSnapshot | null
   leaderIdentity?: string | null
   isJitoLeader?: boolean
+  inSubmitWindow?: boolean
 }

@@ -1,10 +1,14 @@
 import { describe, it, expect } from "vitest"
-import { Keypair, Transaction } from "@solana/web3.js"
+import { Keypair, VersionedTransaction, TransactionMessage } from "@solana/web3.js"
 import { buildSelfTransferBundle, buildSelfTransferTipBundle } from "@valence/jito"
 
 const TIP_ACCOUNT = "96gYZGDn1bYYFCx1JNH7FwwTMyPavFoRjGCYZhVnPEpU"
 const BLOCKHASH = "11111111111111111111111111111111"
 const TIP_LAMPORTS = 1000
+
+function decompile(tx: VersionedTransaction) {
+  return TransactionMessage.decompile(tx.message)
+}
 
 describe("buildSelfTransferBundle", () => {
   it("returns exactly two transactions", () => {
@@ -15,7 +19,7 @@ describe("buildSelfTransferBundle", () => {
     expect(result.signatures).toHaveLength(2)
   })
 
-  it("produces valid base64-encoded transactions", () => {
+  it("produces valid base64-encoded v0 transactions", () => {
     const wallet = Keypair.generate()
     const result = buildSelfTransferBundle(wallet, TIP_ACCOUNT, BLOCKHASH, TIP_LAMPORTS)
 
@@ -23,6 +27,7 @@ describe("buildSelfTransferBundle", () => {
       expect(() => Buffer.from(tx, "base64")).not.toThrow()
       const decoded = Buffer.from(tx, "base64")
       expect(decoded.length).toBeGreaterThan(0)
+      expect(() => VersionedTransaction.deserialize(decoded)).not.toThrow()
     }
   })
 
@@ -31,12 +36,10 @@ describe("buildSelfTransferBundle", () => {
     const result = buildSelfTransferBundle(wallet, TIP_ACCOUNT, BLOCKHASH, TIP_LAMPORTS)
 
     const decoded = Buffer.from(result.bundle[0]!, "base64")
-    const tx = Transaction.from(decoded)
+    const tx = VersionedTransaction.deserialize(decoded)
 
     expect(tx.signatures).toHaveLength(1)
-    const feePayer = tx.feePayer
-    expect(feePayer).toBeDefined()
-    expect(feePayer!.equals(wallet.publicKey)).toBe(true)
+    expect(tx.message.staticAccountKeys[0]!.equals(wallet.publicKey)).toBe(true)
   })
 
   it("second transaction transfers exactly tipLamports to the tip account", () => {
@@ -44,10 +47,11 @@ describe("buildSelfTransferBundle", () => {
     const result = buildSelfTransferBundle(wallet, TIP_ACCOUNT, BLOCKHASH, TIP_LAMPORTS)
 
     const decoded = Buffer.from(result.bundle[1]!, "base64")
-    const tx = Transaction.from(decoded)
+    const tx = VersionedTransaction.deserialize(decoded)
+    const decompiled = decompile(tx)
 
-    expect(tx.instructions).toHaveLength(1)
-    const ix = tx.instructions[0]!
+    expect(decompiled.instructions).toHaveLength(1)
+    const ix = decompiled.instructions[0]!
 
     const data = Buffer.from(ix.data ?? [])
     const buf = Buffer.alloc(8)
@@ -71,9 +75,10 @@ describe("buildSelfTransferBundle", () => {
     const result = buildSelfTransferBundle(wallet, TIP_ACCOUNT, BLOCKHASH, 5000)
 
     const decoded = Buffer.from(result.bundle[1]!, "base64")
-    const tx = Transaction.from(decoded)
+    const tx = VersionedTransaction.deserialize(decoded)
+    const decompiled = decompile(tx)
 
-    const ix = tx.instructions[0]!
+    const ix = decompiled.instructions[0]!
     const data = Buffer.from(ix.data ?? [])
     const buf = Buffer.alloc(8)
     data.copy(buf, 0, 4, 12)
@@ -82,16 +87,13 @@ describe("buildSelfTransferBundle", () => {
     expect(lamports).toBe(5000)
   })
 
-  it("is backward compatible when computeUnitLimit is not provided", () => {
+  it("does not include compute budget instruction when computeUnitLimit is not provided", () => {
     const wallet = Keypair.generate()
     const result = buildSelfTransferBundle(wallet, TIP_ACCOUNT, BLOCKHASH, TIP_LAMPORTS)
 
     expect(result.bundle).toHaveLength(2)
-    const decoded1 = Transaction.from(Buffer.from(result.bundle[0]!, "base64"))
-    expect(decoded1.instructions.length).toBe(1)
-    expect(decoded1.instructions[0]!.programId.toBase58()).not.toBe(
-      "ComputeBudget111111111111111111111111111111",
-    )
+    const decoded1 = VersionedTransaction.deserialize(Buffer.from(result.bundle[0]!, "base64"))
+    expect(decompile(decoded1).instructions.length).toBe(1)
   })
 
   it("includes ComputeBudget.setComputeUnitLimit when computeUnitLimit is set", () => {
@@ -99,16 +101,17 @@ describe("buildSelfTransferBundle", () => {
     const result = buildSelfTransferBundle(wallet, TIP_ACCOUNT, BLOCKHASH, TIP_LAMPORTS, 1)
 
     expect(result.bundle).toHaveLength(2)
-    const decoded1 = Transaction.from(Buffer.from(result.bundle[0]!, "base64"))
-    expect(decoded1.instructions.length).toBe(2)
-    expect(decoded1.instructions[0]!.programId.toBase58()).toBe(
+    const decoded1 = VersionedTransaction.deserialize(Buffer.from(result.bundle[0]!, "base64"))
+    const decompiled = decompile(decoded1)
+    expect(decompiled.instructions.length).toBe(2)
+    expect(decompiled.instructions[0]!.programId.toBase58()).toBe(
       "ComputeBudget111111111111111111111111111111",
     )
   })
 })
 
 describe("buildSelfTransferTipBundle", () => {
-  it("returns one signed transaction containing payload and tip", () => {
+  it("returns one signed v0 transaction containing payload and tip", () => {
     const wallet = Keypair.generate()
     const result = buildSelfTransferTipBundle(wallet, TIP_ACCOUNT, BLOCKHASH, TIP_LAMPORTS)
 
@@ -116,11 +119,12 @@ describe("buildSelfTransferTipBundle", () => {
     expect(result.signatures).toHaveLength(1)
 
     const decoded = Buffer.from(result.bundle[0]!, "base64")
-    const tx = Transaction.from(decoded)
+    const tx = VersionedTransaction.deserialize(decoded)
+    const decompiled = decompile(tx)
 
     expect(tx.signatures).toHaveLength(1)
-    expect(tx.instructions).toHaveLength(2)
-    expect(tx.feePayer!.equals(wallet.publicKey)).toBe(true)
+    expect(decompiled.instructions).toHaveLength(2)
+    expect(tx.message.staticAccountKeys[0]!.equals(wallet.publicKey)).toBe(true)
   })
 
   it("puts the Jito tip instruction after the self-transfer payload", () => {
@@ -128,8 +132,9 @@ describe("buildSelfTransferTipBundle", () => {
     const result = buildSelfTransferTipBundle(wallet, TIP_ACCOUNT, BLOCKHASH, 5000)
 
     const decoded = Buffer.from(result.bundle[0]!, "base64")
-    const tx = Transaction.from(decoded)
-    const ix = tx.instructions[1]!
+    const tx = VersionedTransaction.deserialize(decoded)
+    const decompiled = decompile(tx)
+    const ix = decompiled.instructions[1]!
     const data = Buffer.from(ix.data ?? [])
     const buf = Buffer.alloc(8)
     data.copy(buf, 0, 4, 12)

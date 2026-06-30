@@ -1,4 +1,5 @@
 export { YellowstoneConnection } from "./connection.js"
+export { RawGrpcConnection, isLocalEndpoint } from "./raw.js"
 export { ReconnectBackoff } from "./reconnect.js"
 export { measureLatency, shouldSample } from "./latency.js"
 export type { SlotUpdate, LatencySample, TxUpdate, TxStatusUpdate, YellowConfig } from "./types.js"

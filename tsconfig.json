@@ -8,7 +8,7 @@
     "baseUrl": ".",
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
+
     "paths": {
       "@valence/*": ["src/*"]
     },

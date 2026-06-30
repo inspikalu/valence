@@ -64,20 +64,16 @@ export async function getTipAccounts(
 
 export class TipAccountSelector {
   private accounts: TipAccounts
-  private index: number
 
-  constructor(accounts: TipAccounts, startOffset?: number) {
+  constructor(accounts: TipAccounts) {
     this.accounts = accounts
-    this.index = startOffset !== undefined ? startOffset % accounts.length : Math.floor(Math.random() * accounts.length)
   }
 
   next(): string {
-    const account = this.accounts[this.index]
-    if (!account) {
+    if (this.accounts.length === 0) {
       throw new Error("TipAccountSelector: empty account list")
     }
-    this.index = (this.index + 1) % this.accounts.length
-    return account
+    return this.accounts[Math.floor(Math.random() * this.accounts.length)]!
   }
 
   getAccounts(): TipAccounts {
